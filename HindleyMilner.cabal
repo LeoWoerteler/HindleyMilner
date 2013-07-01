@@ -1,12 +1,11 @@
-name:           HindleyMilner
-version:        0.1
-cabal-version:  >=1.2
-build-type:     Simple
-author:         Leo
+name:              HindleyMilner
+version:           0.0.0.2
+cabal-version:     >=1.2
+build-type:        Simple
+author:            Leo Wörteler
 
 executable HindleyMilner
   hs-source-dirs:  src
-  main-is:         Main.hs
   build-depends:   base >= 4,
                    containers,
                    parsec >= 3,
@@ -14,8 +13,8 @@ executable HindleyMilner
   ghc-options:     -Wall
   other-modules:   
                    HindleyMilner,
-                   Queue,
-                   LExpr,
-                   HindleyMilner.Type
+                   HindleyMilner.Type,
+                   HindleyMilner.LExpr,
+                   HindleyMilner.Queue
   main-is:         Main.hs
 

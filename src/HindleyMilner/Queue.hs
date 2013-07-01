@@ -1,5 +1,5 @@
 
-module Queue (
+module HindleyMilner.Queue (
   Queue,
   empty, 
   enqueue,
@@ -13,6 +13,9 @@ data Queue a = Queue [a] [a]
 
 instance Show a => Show (Queue a) where
   show = showString "Queue" . show . toList
+
+instance Eq a => Eq (Queue a) where
+  q1 == q2 = toList q1 == toList q2
 
 empty :: Queue a
 empty = Queue [] []
@@ -36,6 +39,6 @@ toList :: Queue a -> [a]
 toList (Queue xs ys) = xs ++ reverse ys
 
 enqueueAll :: [a] -> Queue a -> Queue a
-enqueueAll xs (Queue [] _)  = Queue xs []
+enqueueAll xs (Queue [] _ ) = Queue xs []
 enqueueAll xs (Queue hs ts) = Queue hs $ foldl (flip (:)) ts xs
 

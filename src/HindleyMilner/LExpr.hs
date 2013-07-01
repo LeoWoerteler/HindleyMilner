@@ -1,7 +1,7 @@
 
 {-# LANGUAGE DeriveFunctor #-}
 
-module LExpr (
+module HindleyMilner.LExpr (
   LExpr(..),
   VarName,
   typeOf,
@@ -10,11 +10,10 @@ module LExpr (
   parseLExpr
 ) where
 
-import Text.Parsec ( string, letter, alphaNum, char, space, spaces, (<|>),
-                     many, many1, chainl1, eof, try, unexpected, runParser )
-import Text.Parsec.String ( Parser )
-
-import Control.Applicative ( Applicative(..), (<$>) )
+import Control.Applicative ( Applicative(..), (<$>), (<|>) )
+import Text.Parsec.String  ( Parser )
+import Text.Parsec         ( string, letter, alphaNum, char, space, spaces, eof,
+                             many, many1, chainl1, try, unexpected, runParser )
 
 type VarName = String
 
@@ -86,11 +85,11 @@ parseLet = let' <$> parseVar  <* char '='    <* spaces
 
 instance Show (LExpr t) where
   showsPrec _ (Var x _)      = showString x
-  showsPrec p (App e e' _) = showParen (p > 1) $
+  showsPrec p (App e e' _)   = showParen (p > 1) $
     showsPrec 1 e . (' ':) . showsPrec 2 e'
   showsPrec p (Let x e e' _) = showParen (p > 0) $
     ("let " ++) . (x ++) . (" = " ++) . shows e . (" in " ++) . shows e'
-  showsPrec p (Lam x e _) = showParen (p > 0) $ go (('\\':x) ++) e
+  showsPrec p (Lam x e _)    = showParen (p > 0) $ go (('\\':x) ++) e
     where
       go s l = case l of
         Lam x' e' _ -> go (s . ((' ':x') ++)) e'

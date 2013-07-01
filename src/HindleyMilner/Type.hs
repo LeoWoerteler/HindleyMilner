@@ -5,18 +5,22 @@ module HindleyMilner.Type (
   occursIn,
   usedVars,
   replaceTVar,
-  tFoldA
+  tMapA,
+  parsePolyType
 ) where
 
-import Data.List              ( foldl' )
-import Data.Map               ( Map )
-import Data.Set               ( Set, (\\) )
-import Control.Applicative    ( (<$>), Applicative(..) )
-import Control.Monad.State    ( State, evalState, get, put )
-import Control.Monad.Identity ( Identity(..) )
+import Data.Char           ( isLower, isUpper )
+import Data.Map            ( Map )
+import Data.Set            ( Set, (\\) )
+import Control.Applicative ( Applicative(..), (<$>), (<|>), liftA2 )
+import Text.Parsec.String  ( GenParser )
+import Text.Parsec         ( getState, setState, string, alphaNum, char, spaces,
+                             eof, many, chainr1, satisfy, runParser )
 
-import qualified Data.Map as M ( insert, empty, lookup )
-import qualified Data.Set as S ( empty, singleton, fromList, union )
+import qualified Data.Map as M ( insert, empty, lookup, elems )
+import qualified Data.Set as S ( singleton, fromList, union, unions )
+
+type Parser = GenParser Char (Int, Map String Int)
 
 data MonoType
   = TVar Int                -- type variable
@@ -25,78 +29,87 @@ data MonoType
 
 infixr 5 :->
 
-data PolyType
-  = Mono MonoType
-  | Poly [Int] MonoType
+data PolyType = Poly [Int] MonoType
+
+tFold :: (Int -> a) -> (a -> a -> a) -> (String -> [a] -> a) -> MonoType -> a
+tFold var (~>) cons = go
+  where
+    go (TVar x)     = var x
+    go (a :-> b)    = go a ~> go b
+    go (TCons n ts) = cons n $ map go ts
 
 occursIn :: Int -> MonoType -> Bool
-v `occursIn` TVar w     = v == w
-v `occursIn` (a :-> b)  = v `occursIn` a || v `occursIn` b
-v `occursIn` TCons _ ts = (v `occursIn`) `any` ts
+occursIn v = tFold (v ==) (||) (const or)
 
 usedVars :: PolyType -> Set Int
-usedVars p = case p of
-  Mono    t -> used t
-  Poly vs t -> used t \\ S.fromList vs
-  where
-    used (TVar x)     = S.singleton x
-    used (a :-> b)    = used a `S.union` used b
-    used (TCons _ ts) = foldr (S.union . used) S.empty ts
+usedVars (Poly vs t) = used t \\ S.fromList vs
+  where used = tFold S.singleton S.union $ const S.unions
 
 replaceTVar :: (Int -> MonoType) -> MonoType -> MonoType
-replaceTVar f = runIdentity . tFoldA (Identity . f)
+replaceTVar f = tFold f (:->) TCons
 
-tFoldA :: Applicative f => (Int -> f MonoType) -> MonoType -> f MonoType
-tFoldA f = go
-  where
-    go (TVar v)     = f v
-    go (a :-> b)    = (:->) <$> go a <*> go b
-    go (TCons n ts) = TCons n <$>
-      foldr (\t r -> (:) <$> go t <*> r) (pure []) ts
+tMapA :: Applicative f => (Int -> f MonoType) -> MonoType -> f MonoType
+tMapA f = tFold f (liftA2 (:->)) $ \n -> fmap (TCons n) . sequenceA
+  where sequenceA = foldr (liftA2 (:)) (pure [])
 
 instance Show MonoType where
-  showsPrec _ (TVar i)  = ('T':) . shows i
-  showsPrec p (a :-> b) = showParen (p > 0) $
-    showsPrec 1 a . (" -> " ++) . shows b
-  showsPrec p (TCons n ts) = showParen (p > 1 && (not . null) ts) $
-    showString n . foldr (\x r -> (' ':) . showsPrec 2 x . r) id ts
+  showsPrec = showsMonoType M.empty
 
-showsMonoType :: Int -> MonoType -> State (Map Int String, [String]) ShowS
-showsMonoType _ (TVar i) = do
-  (m, vs) <- get
-  case M.lookup i m of
-    Just v  -> return $ showString v
-    Nothing -> do
-      let (v:vs') = vs
-      put (M.insert i v m, vs')
-      return $ showString v
-showsMonoType p (a :-> b) = do
-  sa <- showsMonoType 1 a
-  sb <- showsMonoType 0 b
-  return $ showParen (p > 0) $ sa . showString " -> " . sb
-showsMonoType p (TCons n ts) = do
-  ts' <- foldr showsMono (return id) ts
-  return . showParen (p > 1 && (not . null) ts) $ showString n . (' ':) . ts'
-  where showsMono t m = showsMonoType 2 t >>= \st -> (.) ((' ':) . st) <$> m
+instance Show PolyType where
+  showsPrec = showsPolyType M.empty $ varNames [""]
 
 varNames :: [String] -> [String]
 varNames = tail . go
-  where go xs = xs ++ [ c:x | c <- ['a'..'z'], x <- xs ]
+  where go xs = xs ++ go [ c:x | c <- ['a'..'z'], x <- xs ]
 
-showsPolyType :: Int -> PolyType -> State (Map Int String, [String]) ShowS
-showsPolyType p (Mono t)    = showsMonoType p t
-showsPolyType p (Poly vs t) = do
-  args <- foldl' nameVars (return $ showString "forall ") vs
-  (\t' -> showParen (p > 0) $ args . showString ". " . t') <$> showsMonoType 0 t
+showsMonoType :: Map Int String -> Int -> MonoType -> ShowS
+showsMonoType m _ (TVar i)     =
+  maybe (showChar 'T' . shows i) showString $ M.lookup i m
+showsMonoType m p (a :-> b)    = showParen (p > 0) $
+  showsMonoType m 1 a . showString " -> " . showsMonoType m 0 b
+showsMonoType m p (TCons n ts) = showParen (p > 1 && (not . null) ts) $
+  foldl (\s t -> s . (' ':) . showsMonoType m 2 t) (showString n) ts
+
+showsPolyType :: Map Int String -> [String] -> Int -> PolyType -> ShowS
+showsPolyType _ _  p (Poly [] t) = showsMonoType M.empty p t
+showsPolyType m ns p (Poly vs t) = showParen (p > 0) $
+  showString "forall " . args . showString ". " . showsMonoType m'' 0 t
   where
-    nameVars ma t' = do
-      args' <- ma
-      (m,v:vs') <- get
-      put (M.insert t' v m, vs')
-      return $ args' . showString v . (' ':)
+    (m'', _, args) = foldl nameVars (m, ns, id) vs
+    nameVars (m', ns', a) x = (M.insert x n m', ns'', a . (n ++) . (' ':))
+      where (n:ns'') = ns'
 
-instance Show PolyType where
-  showsPrec p t = evalState (showsPolyType p t) (M.empty, varNames [""])
+parsePolyType :: String -> Either String PolyType
+parsePolyType str = case runParser parse (0, M.empty) "" str of
+  Left  err  -> Left $ show err
+  Right expr -> Right  expr
+  where
+    parse = do
+      e <- parseMType <* eof
+      (_, m) <- getState
+      return $ Poly (M.elems m) e
 
-  
+parseMType  :: Parser MonoType
+parseMType   =  chainr1 parseSingle (string "->" *> spaces *> pure (:->))
 
+parseSingle :: Parser MonoType
+parseSingle  =  TCons <$> parseName isUpper <* spaces <*> many parseSimple
+            <|> parseSimple
+
+parseSimple :: Parser MonoType
+parseSimple  =  TVar  <$> parseTVar
+            <|> TCons <$> parseName isUpper <*> pure [] <* spaces
+            <|> char '(' *> spaces *> parseMType <* char ')' <* spaces
+
+parseName :: (Char -> Bool) -> Parser String
+parseName p = (:) <$> satisfy p <*> many alphaNum
+
+parseTVar :: Parser Int
+parseTVar = do
+  v <- parseName isLower <* spaces
+  (i, m) <- getState
+  case M.lookup v m of
+    Just j  -> return j
+    Nothing -> do
+      setState (i + 1, M.insert v i m)
+      return i
